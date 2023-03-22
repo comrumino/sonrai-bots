@@ -155,7 +155,8 @@ def run(ctx):
         pass
 
     # SQS
-    queue_url = f'https://sqs.{DEFAULT_SQS_REGION}.amazonaws.com/{bot_account_id}/{DEFAULT_QUEUE}'
+    _res = client_sqs.get_queue_url(QueueName=DEFAULT_QUEUE)
+    queue_url = _res['QueueUrl']
     try:
         sqs_msg = {}
         sqs_msg = enrich(ctx)
