@@ -146,31 +146,9 @@ def cw_log(client, msg):
         return False
 
 
-def get_bot_account_id(ctx):
-    try:
-        queryFetchCloudAccount = ('''
-        query fetchCloudAccount {
-          PlatformCloudAccounts(where: { blob: {op: CONTAINS value:"''' + DEFAULT_ROLE + '''"} }) {
-            items(limit: 1) {
-              blob
-            }
-          }
-        }
-        ''')
-        graphql_client = ctx.graphql_client()
-        res = graphql_client.query(queryFetchCloudAccount, {})
-        bot_role_arn = res['PlatformCloudAccounts']['items'][0]['blob']['botRoleArn']
-        bot_role_arn = sonrai.platform.aws.arn.parse(bot_role_arn)
-        account_id = bot_role_arn.account_id
-        return account_id
-    except Exception:
-        return sonrai.platform.aws.arn.parse(ctx.resource_id).account_id
-
-
 def run(ctx):
-    bot_account_id = get_bot_account_id(ctx)
-    client_sqs = ctx.get_client(account_id=bot_account_id).get('sqs')
-    client_logs = ctx.get_client(account_id=bot_account_id).get('logs')
+    client_sqs = ctx.get_client().get('sqs', region_name=DEFAULT_SQS_REGION)
+    client_logs = ctx.get_client().get('logs', region_name=DEFAULT_SQS_REGION)
     try:
         client_logs.create_log_stream(logGroupName=LOG_GROUP, logStreamName=LOG_STREAM)
     except Exception:
