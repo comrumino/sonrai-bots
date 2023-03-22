@@ -1,0 +1,11 @@
+version: 2023-03-21
+type: Remediation
+title: SQS Send Message
+description: >-
+  When the bot/escalation applies this remediation, a message is sent to the sqs queue named "sonrai-sqs-bot"
+cloud: AWS
+operation: EXECUTE_PYTHON_SCRIPT
+authorName: James Stronz
+authorEmail: james.stronz@resmed.com
+python:
+  entrypoint: "bot#run"
