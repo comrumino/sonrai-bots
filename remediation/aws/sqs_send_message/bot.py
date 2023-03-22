@@ -5,7 +5,6 @@ import logging
 import traceback
 
 import sonrai.platform.aws.arn
-import boto3
 import time
 import requests
 import json
@@ -13,16 +12,9 @@ import json
 
 DEFAULT_QUEUE = 'sonrai-sqs-bot'
 DEFAULT_ROLE = f'{DEFAULT_QUEUE}-producer'
+DEFAULT_SQS_REGION = 'us-east-1'
 LOG_GROUP = DEFAULT_ROLE
 LOG_STREAM = 'default'
-
-
-def get_identity_document():
-    _latest = 'http://169.254.169.254/latest'
-    _token = requests.put(f'{_latest}/api/token', headers={'X-aws-ec2-metadata-token-ttl-seconds': '21600'})
-    identity_document = requests.get(f'{_latest}/dynamic/instance-identity/document',
-                                     headers={'X-aws-ec2-metadata-token': str(_token.text)})
-    return identity_document.json()
 
 
 def enrich(ctx):
@@ -154,36 +146,46 @@ def cw_log(client, msg):
         return False
 
 
-def run(ctx):
-    identity_document = get_identity_document()
-    region = identity_document['region']
-    account_id = identity_document['accountId']
-    # Assume into bot producer role
-    client_sts = boto3.client('sts')
-    resp = client_sts.assume_role(RoleArn=f'arn:aws:iam::{account_id}:role/{DEFAULT_ROLE}', RoleSessionName=f'{DEFAULT_ROLE}-{time.time_ns()}')
-    bot_role_session = boto3.Session(region_name=region, aws_access_key_id=resp['Credentials']['AccessKeyId'], aws_secret_access_key=resp['Credentials']['SecretAccessKey'], aws_session_token=resp['Credentials']['SessionToken'])
-
-    # CloudWatch
-    client_cw = bot_role_session.client('logs')
+def get_bot_account_id(ctx):
     try:
-        client_cw.create_log_stream(logGroupName=LOG_GROUP, logStreamName=LOG_STREAM)
+        queryFetchCloudAccount = ('''
+        query fetchCloudAccount {
+          PlatformCloudAccounts(where: { blob: {op: CONTAINS value:"''' + DEFAULT_ROLE + '''"} }) {
+            items(limit: 1) {
+              blob
+            }
+          }
+        }
+        ''')
+        graphql_client = ctx.graphql_client()
+        res = graphql_client.query(queryFetchCloudAccount, {})
+        bot_role_arn = res['PlatformCloudAccounts']['items'][0]['blob']['botRoleArn']
+        bot_role_arn = sonrai.platform.aws.arn.parse(bot_role_arn)
+        account_id = bot_role_arn.account_id
+        return account_id
+    except Exception:
+        return sonrai.platform.aws.arn.parse(ctx.resource_id).account_id
+
+
+def run(ctx):
+    bot_account_id = get_bot_account_id(ctx)
+    client_sqs = ctx.get_client(account_id=bot_account_id).get('sqs')
+    client_logs = ctx.get_client(account_id=bot_account_id).get('logs')
+    try:
+        client_logs.create_log_stream(logGroupName=LOG_GROUP, logStreamName=LOG_STREAM)
     except Exception:
         pass
 
     # SQS
-    client_sqs = bot_role_session.client('sqs')
-
-    queue_url = f'https://sqs.{region}.amazonaws.com/{account_id}/{DEFAULT_QUEUE}'
+    queue_url = f'https://sqs.{DEFAULT_SQS_REGION}.amazonaws.com/{bot_account_id}/{DEFAULT_QUEUE}'
     try:
         sqs_msg = {}
         sqs_msg = enrich(ctx)
+        cw_log(client_logs, json.dumps(sqs_msg))
     except Exception:
-        cw_log(client_cw, traceback.format_exc())
-    else:
-        cw_log(client_cw, json.dumps(sqs_msg))
+        cw_log(client_logs, traceback.format_exc())
     try:
         res = client_sqs.send_message(QueueUrl=queue_url, MessageBody=json.dumps(sqs_msg))
+        cw_log(client_logs, json.dumps(res))
     except Exception:
-        cw_log(client_cw, traceback.format_exc())
-    else:
-        cw_log(client_cw, json.dumps(res))
+        cw_log(client_logs, traceback.format_exc())

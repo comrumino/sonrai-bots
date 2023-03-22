@@ -10,4 +10,8 @@ authorEmail: james.stronz@resmed.com
 python:
   entrypoint: "bot#run"
 requiredPermissions: |-
-  No permissions needed
+  sqs:SendMessage
+  logs:CreateLogStream
+  logs:DescribeLogGroups
+  logs:DescribeLogStreams
+  logs:PutLogEvents
