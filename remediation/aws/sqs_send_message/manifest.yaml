@@ -9,3 +9,5 @@ authorName: James Stronz
 authorEmail: james.stronz@resmed.com
 python:
   entrypoint: "bot#run"
+requiredPermissions: |-
+  No permissions needed
