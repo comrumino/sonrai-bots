@@ -1,4 +1,4 @@
-version: 2023-03-22-v1
+version: 2023-03-22-v3
 type: Remediation
 title: SQS Send Message
 description: >-

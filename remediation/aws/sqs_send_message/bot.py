@@ -6,7 +6,6 @@ import traceback
 
 import sonrai.platform.aws.arn
 import time
-import requests
 import json
 
 
@@ -17,112 +16,122 @@ LOG_GROUP = DEFAULT_ROLE
 LOG_STREAM = 'default'
 
 
-def enrich(ctx):
-    result = {}
-    # Get the ticket data from the context
-    ticket = ctx.config.get('data').get('ticket')
-    ticket_srn = ticket.get('srn')
-    result['ticket_url'] = f'https://app.sonraisecurity.com/App/TicketDetails?srn={ticket_srn}'
-
-    # Create GraphQL client
-    graphql_client = ctx.graphql_client()
-
-    # query ticket endpoint for swimlanes
-    queryTicketsForSwimlanes = ('''
-    {
-      Tickets(
-        where: {
-          srn: {
-            op: EQ
-            value: "'''+ticket_srn+'''"
-          }
+def enrich(client_logs, ctx):
+    try:
+        result = {
+            'policy': None,
+            'policy_type': None,
+            'severityCategory': None,
+            'resource_name': None,
+            'resource_id': str(sonrai.platform.aws.arn.parse(ctx.resource_id)),
+            'swimlane_emails': None
         }
-      ) {
-        items {
-          swimlaneSRNs
-          account
-          firstSeen
-          lastSeen
-          severityCategory
-          resourceName
-          resourceTypeFriendlyName
-          status
-          policy {
-            title
-            controlPolicyMetaTypes
-          }
-        }
-      }
-    }
-    ''')
-    variables = {}
-    logging.info('Searching for swimlanes of ticket {}'.format(ticket_srn))
-    r_ticket_swimlanes = graphql_client.query(queryTicketsForSwimlanes, variables)
-    ticket = r_ticket_swimlanes['Tickets']['items'][0]
+        # Get the ticket data from the context
+        ticket = ctx.config.get('data').get('ticket')
+        ticket_srn = ticket.get('srn')
+        result['ticket_url'] = f'https://app.sonraisecurity.com/App/TicketDetails?srn={ticket_srn}'
 
-    result['policy'] = ticket.get('policy', {}).get('title')
-    result['policy_type'] = ticket.get('policy', {}).get('controlPolicyMetaTypes', []).join('/')
-    result['severityCategory'] = ticket['severityCategory']
-    result['status'] = ticket['status']
+        # Create GraphQL client
+        graphql_client = ctx.graphql_client()
 
-    result['resource_name'] = ticket['resourceName']
-    result['resource_id'] = str(sonrai.platform.aws.arn.parse(ctx.resource_id))
-    swimlaneList = [s for s in r_ticket_swimlanes['Tickets']['items'][0]['swimlaneSRNs'] if 'Global' not in s]
-
-    # get resourceIDs of the Swimlanes of the tickets
-    querySwimlanes = ('''
-    query Swimlanes ($swimlaneSRNs: [String]){Swimlanes
-        (where:
-               {srn: {op:IN_LIST, values:$swimlaneSRNs}}
-        )
-      {
+        # query ticket endpoint for swimlanes
+        queryTicketsForSwimlanes = ('''
+        {
+          Tickets(
+            where: {
+              srn: {
+                op: EQ
+                value: "'''+ticket_srn+'''"
+              }
+            }
+          ) {
             items {
-                  srn
-                  title
-        }}}
-    ''')
-
-    # Build the variable to use the query
-
-    variables = json.dumps({"swimlaneSRNs": swimlaneList})
-    r_swimlanes = graphql_client.query(querySwimlanes, variables)
-    titles = set([sw['title'] for sw in r_swimlanes['Swimlanes']['items']])
-    # get integrations
-    queryIntegrations = '''
-        query getIntegrations {
-          Integrations {
-            items {
-              srn
-              title
-              type
-              createdBy
-              email { emailList { email } }
-              configs {
-                srn
-                createdBy
-                assignment {
-                  srn
-                  SwimlaneSRN
-                }
-                email {
-                  actionTypes
-                  emailFilter {
-                    ticketKey
-                    ticketType
-                    allKeys
-                    allTypes
-                  }
-                }
+              swimlaneSRNs
+              account
+              firstSeen
+              lastSeen
+              severityCategory
+              resourceName
+              resourceTypeFriendlyName
+              status
+              policy {
+                title
+                controlPolicyMetaTypes
               }
             }
           }
         }
-    '''
-    integrations = graphql_client.query(queryIntegrations, {})
-    _items = [i for i in list(integrations['Integrations']['items'] or []) if i['title'] in titles]
-    swimlane_emails = {i['title']: i.get('email', {}).get('emailList', ['null']).join(';') for i in _items}
-    result['swimlane_emails'] = swimlane_emails
-    return result
+        ''')
+        variables = {}
+        logging.info('Searching for swimlanes of ticket {}'.format(ticket_srn))
+        r_ticket_swimlanes = graphql_client.query(queryTicketsForSwimlanes, variables)
+        try:
+            ticket = r_ticket_swimlanes['Tickets']['items'][0]
+            result['policy'] = ticket.get('policy', {}).get('title')
+            result['policy_type'] = '/'.join(ticket.get('policy', {}).get('controlPolicyMetaTypes', []))
+            result['severityCategory'] = ticket['severityCategory']
+        except Exception:
+            cw_log(client_logs, traceback.format_exc())
+
+        # get resourceIDs of the Swimlanes of the tickets
+        querySwimlanes = ('''
+        query Swimlanes ($swimlaneSRNs: [String]){Swimlanes
+            (where:
+                   {srn: {op:IN_LIST, values:$swimlaneSRNs}}
+            )
+          {
+                items {
+                      srn
+                      title
+            }}}
+        ''')
+
+        # Build the variable to use the query
+        result['resource_name'] = ticket['resourceName']
+        swimlaneList = [s for s in r_ticket_swimlanes['Tickets']['items'][0]['swimlaneSRNs'] if 'Global' not in s]
+        variables = json.dumps({"swimlaneSRNs": swimlaneList})
+        r_swimlanes = graphql_client.query(querySwimlanes, variables)
+        titles = set([sw['title'] for sw in r_swimlanes['Swimlanes']['items']])
+        result['swimlane_emails'] = {t: None for t in titles}
+        # get integrations
+        queryIntegrations = '''
+            query getIntegrations {
+              Integrations {
+                items {
+                  srn
+                  title
+                  type
+                  createdBy
+                  email { emailList { email } }
+                  configs {
+                    srn
+                    createdBy
+                    assignment {
+                      srn
+                      SwimlaneSRN
+                    }
+                    email {
+                      actionTypes
+                      emailFilter {
+                        ticketKey
+                        ticketType
+                        allKeys
+                        allTypes
+                      }
+                    }
+                  }
+                }
+              }
+            }
+        '''
+        integrations = graphql_client.query(queryIntegrations, {})
+        _items = [i for i in list(integrations['Integrations']['items'] or []) if i['title'] in titles]
+        for i in _items:
+            result['swimlane_emails'][i['title']] = ';'.join(i.get('email', {}).get('emailList', ['null']))
+    except Exception:
+        cw_log(client_logs, traceback.format_exc())
+    finally:
+        return result
 
 
 def cw_log(client, msg):
@@ -157,12 +166,7 @@ def run(ctx):
     # SQS
     _res = client_sqs.get_queue_url(QueueName=DEFAULT_QUEUE)
     queue_url = _res['QueueUrl']
-    try:
-        sqs_msg = {}
-        sqs_msg = enrich(ctx)
-        cw_log(client_logs, json.dumps(sqs_msg))
-    except Exception:
-        cw_log(client_logs, traceback.format_exc())
+    sqs_msg = enrich(ctx)
     try:
         res = client_sqs.send_message(QueueUrl=queue_url, MessageBody=json.dumps(sqs_msg))
         cw_log(client_logs, json.dumps(res))
