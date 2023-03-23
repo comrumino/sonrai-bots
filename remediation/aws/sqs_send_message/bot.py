@@ -22,6 +22,7 @@ def enrich(client_logs, ctx):
             'policy': None,
             'policy_type': None,
             'severityCategory': None,
+            'ticket_url': None,
             'resource_name': None,
             'resource_id': str(sonrai.platform.aws.arn.parse(ctx.resource_id)),
             'swimlane_emails': None
@@ -72,6 +73,7 @@ def enrich(client_logs, ctx):
             result['severityCategory'] = ticket['severityCategory']
         except Exception:
             cw_log(client_logs, traceback.format_exc())
+            return result
 
         # get resourceIDs of the Swimlanes of the tickets
         querySwimlanes = ('''
@@ -128,9 +130,9 @@ def enrich(client_logs, ctx):
         _items = [i for i in list(integrations['Integrations']['items'] or []) if i['title'] in titles]
         for i in _items:
             result['swimlane_emails'][i['title']] = ';'.join(i.get('email', {}).get('emailList', ['null']))
+        return result
     except Exception:
         cw_log(client_logs, traceback.format_exc())
-    finally:
         return result
 
 
@@ -164,10 +166,10 @@ def run(ctx):
         pass
 
     # SQS
-    _res = client_sqs.get_queue_url(QueueName=DEFAULT_QUEUE)
-    queue_url = _res['QueueUrl']
-    sqs_msg = enrich(ctx)
     try:
+        _res = client_sqs.get_queue_url(QueueName=DEFAULT_QUEUE)
+        queue_url = _res['QueueUrl']
+        sqs_msg = enrich(ctx)
         res = client_sqs.send_message(QueueUrl=queue_url, MessageBody=json.dumps(sqs_msg))
         cw_log(client_logs, json.dumps(res))
     except Exception:
