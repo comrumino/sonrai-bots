@@ -169,7 +169,7 @@ def run(ctx):
     try:
         _res = client_sqs.get_queue_url(QueueName=DEFAULT_QUEUE)
         queue_url = _res['QueueUrl']
-        sqs_msg = enrich(ctx)
+        sqs_msg = enrich(client_logs, ctx)
         res = client_sqs.send_message(QueueUrl=queue_url, MessageBody=json.dumps(sqs_msg))
         cw_log(client_logs, json.dumps(res))
     except Exception:
