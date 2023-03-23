@@ -1,4 +1,4 @@
-version: 2023-03-23-v1
+version: 2023-03-23-v2
 type: Remediation
 title: SQS Send Message
 description: >-
@@ -11,6 +11,7 @@ python:
   entrypoint: "bot#run"
 requiredPermissions: |-
   sqs:SendMessage
+  sqs:GetQueueUrl
   logs:CreateLogStream
   logs:DescribeLogGroups
   logs:DescribeLogStreams
