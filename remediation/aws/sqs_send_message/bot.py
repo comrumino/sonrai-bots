@@ -36,36 +36,31 @@ def enrich(client_logs, ctx):
         graphql_client = ctx.graphql_client()
 
         # query ticket endpoint for swimlanes
-        queryTicketsForSwimlanes = ('''
-        {
-          Tickets(
-            where: {
-              srn: {
-                op: EQ
-                value: "'''+ticket_srn+'''"
+        queryTicketsForSwimlanes = '''
+            query getTickets($ticket_srn: String) {
+              Tickets(where: { srn: { op: EQ, value: $ticket_srn } }) {
+                items {
+                  swimlanes {
+                    title
+                    srn
+                  }
+                  account
+                  firstSeen
+                  lastSeen
+                  severityCategory
+                  resourceName
+                  resourceTypeFriendlyName
+                  status
+                  policy {
+                    title
+                    controlPolicyMetaTypes
+                  }
+                }
               }
             }
-          ) {
-            items {
-              swimlaneSRNs
-              account
-              firstSeen
-              lastSeen
-              severityCategory
-              resourceName
-              resourceTypeFriendlyName
-              status
-              policy {
-                title
-                controlPolicyMetaTypes
-              }
-            }
-          }
-        }
-        ''')
-        variables = {}
+        '''
         logging.info('Searching for swimlanes of ticket {}'.format(ticket_srn))
-        r_ticket_swimlanes = graphql_client.query(queryTicketsForSwimlanes, variables)
+        r_ticket_swimlanes = graphql_client.query(queryTicketsForSwimlanes, {'ticket_srn': ticket_srn})
         try:
             ticket = r_ticket_swimlanes['Tickets']['items'][0]
             result['policy'] = ticket.get('policy', {}).get('title')
@@ -75,61 +70,39 @@ def enrich(client_logs, ctx):
             cw_log(client_logs, traceback.format_exc())
             return result
 
-        # get resourceIDs of the Swimlanes of the tickets
-        querySwimlanes = ('''
-        query Swimlanes ($swimlaneSRNs: [String]){Swimlanes
-            (where:
-                   {srn: {op:IN_LIST, values:$swimlaneSRNs}}
-            )
-          {
-                items {
-                      srn
-                      title
-            }}}
-        ''')
-
         # Build the variable to use the query
         result['resource_name'] = ticket['resourceName']
-        swimlaneList = [s for s in r_ticket_swimlanes['Tickets']['items'][0]['swimlaneSRNs'] if 'Global' not in s]
-        variables = json.dumps({"swimlaneSRNs": swimlaneList})
-        r_swimlanes = graphql_client.query(querySwimlanes, variables)
-        titles = set([sw['title'] for sw in r_swimlanes['Swimlanes']['items']])
+        result['account_id'] = ticket['account']
+        result['last_seen'] = ticket['lastSeen']
+        titles = [s['title'] for s in ticket['swimlanes']]
         result['swimlane_emails'] = {t: None for t in titles}
         # get integrations
         queryIntegrations = '''
-            query getIntegrations {
-              Integrations {
+            query getIntegrations($swimlanes: [String]) {
+              Integrations(
+                where: {
+                  title: { op: IN_LIST, values: $swimlanes }
+                  type: { op: EQ, value: "EMAIL" }
+                }
+              ) {
                 items {
                   srn
                   title
                   type
-                  createdBy
-                  email { emailList { email } }
-                  configs {
-                    srn
-                    createdBy
-                    assignment {
-                      srn
-                      SwimlaneSRN
-                    }
-                    email {
-                      actionTypes
-                      emailFilter {
-                        ticketKey
-                        ticketType
-                        allKeys
-                        allTypes
-                      }
+                  email {
+                    emailList {
+                      email
                     }
                   }
                 }
               }
             }
         '''
-        integrations = graphql_client.query(queryIntegrations, {})
-        _items = [i for i in list(integrations['Integrations']['items'] or []) if i['title'] in titles]
-        for i in _items:
-            result['swimlane_emails'][i['title']] = ';'.join(i.get('email', {}).get('emailList', ['null']))
+        integrations = graphql_client.query(queryIntegrations, {'swimlanes': titles})
+        integrations = integrations['Integrations']['items'] or []
+        for i in integrations:
+            _flat_email_list = [u['email'] for u in i['email']['emailList']]
+            result['swimlane_emails'][i['title']] = ';'.join(_flat_email_list)
         return result
     except Exception:
         cw_log(client_logs, traceback.format_exc())
